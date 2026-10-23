@@ -1,0 +1,7 @@
+numpy>=1.26
+scikit-learn>=1.4
+pandas>=2.1
+scipy>=1.11
+faiss-cpu>=1.8
+pytest>=8.0
+

@@ -1,0 +1,76 @@
+"""Configuration loading and validation."""
+
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass(frozen=True)
+class ExperimentConfig:
+    config_id: str
+    model: str
+    base_url: str
+    temperature: float
+    answer_max_tokens: int
+    lesson_max_tokens: int
+    repeats: int
+    top_k: int
+    min_similarity: float
+    embedding_dim: int
+    max_new_calls: int
+    max_total_tokens: int
+    feedback_error_threshold: float
+    conditions: tuple[str, ...]
+    benchmark: str
+
+    @classmethod
+    def load(cls, path: str | Path) -> "ExperimentConfig":
+        path = Path(path)
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        model = os.environ.get("EXPERIENCE_LLM_MODEL", raw.get("model", "")).strip()
+        base_url = os.environ.get("EXPERIENCE_LLM_BASE_URL", raw.get("base_url", "")).strip()
+        max_calls = int(os.environ.get("EXPERIENCE_MAX_NEW_CALLS", raw.get("max_new_calls", 120)))
+        max_tokens = int(
+            os.environ.get("EXPERIENCE_MAX_TOTAL_TOKENS", raw.get("max_total_tokens", 300_000))
+        )
+        cfg = cls(
+            config_id=str(raw["config_id"]),
+            model=model,
+            base_url=base_url,
+            temperature=float(raw.get("temperature", 0.0)),
+            answer_max_tokens=int(raw.get("answer_max_tokens", 220)),
+            lesson_max_tokens=int(raw.get("lesson_max_tokens", 320)),
+            repeats=int(raw.get("repeats", 1)),
+            top_k=int(raw.get("top_k", 2)),
+            min_similarity=float(raw.get("min_similarity", 0.08)),
+            embedding_dim=int(raw.get("embedding_dim", 2048)),
+            max_new_calls=max_calls,
+            max_total_tokens=max_tokens,
+            feedback_error_threshold=float(raw.get("feedback_error_threshold", 0.3)),
+            conditions=tuple(raw.get("conditions", ["N", "R", "L"])),
+            benchmark=str(raw.get("benchmark", "data/benchmark_v0.jsonl")),
+        )
+        cfg.validate()
+        return cfg
+
+    def validate(self) -> None:
+        if not self.model:
+            raise ValueError("model must be non-empty")
+        if not self.base_url.startswith(("http://", "https://")):
+            raise ValueError("base_url must be an HTTP(S) URL")
+        if self.repeats < 1:
+            raise ValueError("repeats must be at least 1")
+        if self.top_k < 1 or self.embedding_dim < 64:
+            raise ValueError("top_k must be >= 1 and embedding_dim >= 64")
+        if not 0.0 <= self.min_similarity <= 1.0:
+            raise ValueError("min_similarity must be between 0 and 1")
+        if not set(self.conditions) <= {"N", "R", "L"}:
+            raise ValueError("conditions must be a subset of N, R, L")
+        if not 0.0 < self.feedback_error_threshold <= 1.0:
+            raise ValueError("feedback_error_threshold must be in (0, 1]")
+        if self.max_new_calls < 1 or self.max_total_tokens < 1:
+            raise ValueError("call and token budgets must be positive")
+

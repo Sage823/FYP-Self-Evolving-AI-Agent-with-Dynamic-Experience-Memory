@@ -1,0 +1,18 @@
+{
+  "config_id": "experience-memory-v0",
+  "model": "deepseek-v4.1-flash",
+  "base_url": "https://tokendance.space/gateway/v1",
+  "temperature": 0.0,
+  "answer_max_tokens": 800,
+  "lesson_max_tokens": 500,
+  "repeats": 1,
+  "top_k": 2,
+  "min_similarity": 0.08,
+  "embedding_dim": 2048,
+  "max_new_calls": 120,
+  "max_total_tokens": 300000,
+  "feedback_error_threshold": 0.3,
+  "conditions": ["N", "R", "L"],
+  "benchmark": "data/benchmark_v0.jsonl"
+}
+
