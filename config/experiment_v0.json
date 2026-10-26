@@ -1,8 +1,9 @@
 {
   "config_id": "experience-memory-v0",
-  "model": "deepseek-v4.1-flash",
-  "base_url": "https://tokendance.space/gateway/v1",
+  "model": "deepseek-flash",
+  "base_url": "https://api.deepseek.com",
   "temperature": 0.0,
+  "reasoning_effort": "none",
   "answer_max_tokens": 800,
   "lesson_max_tokens": 500,
   "repeats": 1,

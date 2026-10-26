@@ -1,0 +1,18 @@
+{
+  "config_id": "experience-memory-bbh-v1",
+  "model": "deepseek-flash",
+  "base_url": "https://api.deepseek.com",
+  "temperature": 0.0,
+  "reasoning_effort": "none",
+  "answer_max_tokens": 1200,
+  "lesson_max_tokens": 500,
+  "repeats": 1,
+  "top_k": 2,
+  "min_similarity": 0.05,
+  "embedding_dim": 2048,
+  "max_new_calls": 120,
+  "max_total_tokens": 300000,
+  "feedback_error_threshold": 0.3,
+  "conditions": ["N", "R", "L"],
+  "benchmark": "data/benchmark_bbh_v1.jsonl"
+}

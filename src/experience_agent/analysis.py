@@ -1,4 +1,7 @@
-"""Descriptive analysis for the one-model v0 experiment."""
+"""单模型 v0 实验的描述性统计分析。
+
+by AI.Coding
+"""
 
 from __future__ import annotations
 
@@ -18,6 +21,7 @@ def _rate(rows: list[dict[str, Any]]) -> float | None:
 
 
 def exact_mcnemar(a_wrong: list[bool], b_wrong: list[bool]) -> dict[str, Any]:
+    """根据两组配对的错误标记计算精确 McNemar 检验。"""
     if len(a_wrong) != len(b_wrong):
         raise ValueError("paired outcomes differ in length")
     b = sum(left and not right for left, right in zip(a_wrong, b_wrong))
@@ -25,7 +29,8 @@ def exact_mcnemar(a_wrong: list[bool], b_wrong: list[bool]) -> dict[str, Any]:
     if b + c == 0:
         p_value = 1.0
     else:
-        p_value = min(1.0, 2 * binomtest(min(b, c), b + c, 0.5).pvalue)
+        # SciPy 默认返回双侧精确 p 值；再次乘二会系统性放大结果。
+        p_value = float(binomtest(min(b, c), b + c, 0.5).pvalue)
     return {"discordant_a_wrong": b, "discordant_b_wrong": c, "p_value": p_value}
 
 
@@ -108,7 +113,7 @@ def analyse(rows: list[dict[str, Any]], eligible_families: set[str]) -> dict[str
         "conditions": by_condition,
         "by_family": by_family,
         "paired_contrasts": paired,
-        "safety": {**safety_summary, "L_minus_N_accuracy_drop_pp": safety_drop},
+        "safety": {**safety_summary, "N_minus_L_accuracy_drop_pp": safety_drop},
         "pilot_criteria_met": {
             "H1_at_least_30pct_relative_reduction": (
                 h1_reduction is not None and h1_reduction >= 30
@@ -117,7 +122,7 @@ def analyse(rows: list[dict[str, Any]], eligible_families: set[str]) -> dict[str
             "unrelated_accuracy_drop_at_most_5pp": (
                 safety_drop is not None and safety_drop <= 5
             ),
-            "note": "These are descriptive v0 criteria, not a frozen final-study claim.",
+            "note": "These are descriptive pilot criteria, not a frozen final-study claim.",
         },
     }
 
@@ -137,7 +142,7 @@ def write_analysis(run_dir: str | Path, rows: list[dict[str, Any]], eligible: se
 
 def render_report(summary: dict[str, Any]) -> str:
     lines = [
-        "# Experience-memory v0 run report",
+        "# Experience-memory run report",
         "",
         f"Eligible error families: {', '.join(summary['eligible_families']) or 'none'}",
         "",
@@ -167,14 +172,14 @@ def render_report(summary: dict[str, Any]) -> str:
     for name, value in summary["paired_contrasts"].items():
         lines.append(
             f"| {name} | {value['risk_difference_pp']:+.1f} | "
-            f"{_fmt_pct(value['relative_reduction_pct'])} | {value['p_value']:.4g} |"
+            f"{_fmt_percent_value(value['relative_reduction_pct'])} | {value['p_value']:.4g} |"
         )
     safety = summary["safety"]
     lines += [
         "",
         "## Safety check",
         "",
-        f"Unrelated-set accuracy drop (L minus N): {_fmt_pp(safety.get('L_minus_N_accuracy_drop_pp'))}",
+        f"Accuracy drop from N to L: {_fmt_pp(safety.get('N_minus_L_accuracy_drop_pp'))}",
         "",
         "## Interpretation boundary",
         "",
@@ -191,4 +196,9 @@ def _fmt_pct(value: float | None) -> str:
 
 def _fmt_pp(value: float | None) -> str:
     return "n/a" if value is None else f"{value:+.1f} pp"
+
+
+def _fmt_percent_value(value: float | None) -> str:
+    """格式化已经采用百分数单位的数值，不再额外乘以一百。"""
+    return "n/a" if value is None else f"{value:.1f}%"
 

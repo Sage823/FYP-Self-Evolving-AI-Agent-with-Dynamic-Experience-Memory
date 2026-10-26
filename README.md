@@ -15,15 +15,21 @@ Version `v0` implements the complete minimal learning loop:
 5. report repeated-error rate, retrieval hit rate, paired contrasts, and unrelated
    question safety.
 
-The repository has a validated 32-item benchmark, 5 passing tests, an offline
+The repository has validated v0 and BBH-inspired 32-item benchmarks, 14 passing tests, an offline
 end-to-end smoke mode, response caching, and hard per-run call/token budgets.
 
-On 2026-10-23 the configured model (`deepseek-v4.1-flash`) answered all eight
+On 2026-10-23 the previously configured model (`deepseek-v4.1-flash`) answered all eight
 feedback items correctly on the current hard benchmark. The runner therefore
 stopped before inventing an effect or storing lessons from non-errors. This is a
-benchmark-calibration result, not evidence for or against experience memory. The
-next milestone is to find a task distribution on which the selected model makes
-reproducible errors.
+benchmark-calibration result, not evidence for or against experience memory. It
+motivated the harder BBH-inspired task distribution described below.
+
+That milestone is now represented by `benchmark_bbh_v2.jsonl`. A real
+`deepseek-flash` run produced six feedback errors, persisted six raw corrections
+and six abstracted lessons in ChromaDB, and completed all three experimental
+conditions. In this small pilot, raw correction memory reduced repeated errors
+from 56.25% to 37.5%, while abstracted lessons did not improve the aggregate rate;
+the paired result was not statistically significant and is not a final claim.
 
 ## System
 
@@ -32,7 +38,7 @@ question
    |
    +-- no memory / raw correction memory / abstract lesson memory
    |          |
-   |          +-- local hashed-vector retrieval (FAISS)
+   |          +-- local hashed embeddings stored and queried in ChromaDB
    |
    +-- answer
           |
@@ -47,17 +53,24 @@ keeps the first milestone cheap and makes the workflow easy to debug.
 Python 3.10+ is required.
 
 ```powershell
+# Create an isolated environment so project dependencies do not leak into the
+# system Python installation.
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 python -m experience_agent validate
 python -m pytest
 python -m experience_agent run --offline --output results/runs/offline_smoke
+python -m experience_agent.bbh_benchmark --difficulty 2 --output data/benchmark_bbh_v2.jsonl
+python -m experience_agent run --config config/experiment_bbh_v2.json
 ```
 
 For a real model run, set the API key in the shell. The client also supports an
 existing local DSH credential store, but never writes a key into the repository.
 
 ```powershell
-$env:TOKENDANCE_API_KEY = "<key>"
+$env:DEEPSEEK_API_KEY = "<key>"
 python -m experience_agent run --config config/experiment_v0.json
 ```
 
@@ -106,8 +119,8 @@ results/                 generated runs (Git-ignored)
 - Empty or length-capped replies are retried with a larger completion budget and
   are never cached as answers.
 - A run stops at 120 new model calls and 300,000 billed tokens by default.
-- Retrieval uses a 2,048-dimensional local hashing vectorizer and FAISS, avoiding
-  embedding-model downloads and per-query embedding cost.
+- Retrieval uses a 2,048-dimensional local hashing vectorizer with persistent
+  ChromaDB collections, avoiding embedding-model downloads and per-query embedding cost.
 - The v0 run uses one repeat because it is a pipeline pilot, not a final
   statistical study.
 

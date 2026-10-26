@@ -18,21 +18,29 @@ student IDs and meeting details from official records before submission.
 This month we turned the proposal into a clean, independently implemented
 experimental workspace and completed the first end-to-end version of the learning
 loop. The current system can answer a question with no memory, receive a correction
-after an error, store either the raw correction or an extracted rule in external
-memory, retrieve relevant records using a lightweight FAISS vector index, and answer
-new questions with the retrieved experience.
+after an error, store either the raw correction or an extracted rule in separate
+persistent ChromaDB collections, retrieve relevant records using deterministic local
+hashed embeddings, and answer new questions with the retrieved experience.
 
 We created a 32-item pilot benchmark covering constraint ordering, ordered decision
 rules, conditional pricing, and synthetic protocol application. The benchmark has
 separate feedback, follow-up, and unrelated-question splits. We also implemented
 automatic scoring and a paired analysis of repeated-error rates, retrieval hit
-rate, and unrelated-question accuracy. Five offline tests now pass, including a
+rate, and unrelated-question accuracy. Fourteen automated tests now pass, including a
 complete no-API run of the answer-correct-learn-retrieve loop.
 
 The implementation includes response caching, a per-run API budget, benchmark
-integrity checks, and detailed event logs. Real-model testing on
-`deepseek-v4.1-flash` revealed that the model solved all current feedback items,
+integrity checks, and detailed event logs. Real-model testing on the official
+DeepSeek API with `deepseek-flash` revealed that the model solved all current feedback items,
 so the workflow correctly stopped before creating lessons from correct answers.
+
+We then generated a harder BBH-inspired benchmark with programmatic answer oracles.
+After an initial calibration remained too easy, the second version triggered six
+real feedback errors and completed the full correction-memory-transfer loop. Raw
+correction memory reduced the observed repeated-error rate from 56.25% to 37.5%;
+abstracted lessons did not improve the aggregate result, and the small paired test
+was not statistically significant. This is pilot evidence for a functioning
+workflow, not a final research conclusion.
 
 ## Major difficulties
 

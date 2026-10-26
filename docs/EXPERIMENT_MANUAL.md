@@ -66,8 +66,8 @@ prevents the experiment from claiming an effect on a task the model already solv
    the configured threshold.
 4. **Create memory:** store wrong-item corrections under `R`; ask the model for a
    general rule and store it under `L`.
-5. **Retrieve:** encode a query with local hashed features and use FAISS inner
-   product search on L2-normalised vectors.
+5. **Retrieve:** encode a query with local hashed features and query persistent
+   ChromaDB collections with cosine distance.
 6. **Follow-up run:** answer identical follow-up items under `N`, `R`, and `L`.
 7. **Safety run:** answer unrelated items under all conditions.
 8. **Analyse:** calculate repeated-error rate, retrieval hit rate, exact McNemar
@@ -90,11 +90,10 @@ The same model answers questions and extracts lessons. This is not the final des
 for controlling stylistic self-consistency, but it makes the first implementation
 debuggable and stays within a low budget.
 
-Configured model: `deepseek-v4.1-flash`.
+Configured model: `deepseek-flash` through the official DeepSeek API.
 
-Reason: it was reachable through the available OpenAI-compatible gateway and
-completed the benchmark without malformed replies. Candidate probes were not used
-as experimental evidence.
+Reason: the official OpenAI-compatible endpoint supports the existing chat and
+JSON-output paths. Candidate probes are not used as experimental evidence.
 
 Observed probes:
 
@@ -103,16 +102,17 @@ Observed probes:
 - `qwen3.5-flash`: response latency was too high for a pilot and was stopped.
 - `glm-4.5-air`: answered the current feedback set correctly.
 
-### D-03: FAISS plus hashed lexical vectors
+### D-03: ChromaDB plus hashed lexical vectors
 
-The proposal lists ChromaDB or FAISS as acceptable lightweight vector storage. v0
-uses FAISS with a deterministic 2,048-dimensional hashing vectorizer, word
-unigrams and bigrams, and cosine similarity.
+The proposal identifies ChromaDB as the primary experience store. v0 uses persistent
+ChromaDB collections with a deterministic 2,048-dimensional hashing vectorizer,
+word unigrams and bigrams, and cosine distance. Raw corrections and abstracted
+lessons are kept in separate collections inside each run directory.
 
-Reason: no neural embedding weights must be downloaded, no API embedding calls are
-needed, and the index remains deterministic. This tests the full retrieval
-interface at near-zero cost. A sentence-transformer or hosted embedding backend is
-planned after the task distribution is calibrated.
+Reason: Chroma supplies inspectable local persistence while custom embeddings avoid
+neural-weight downloads and API embedding calls. The vectors remain deterministic.
+A sentence-transformer or hosted embedding backend is planned after the task
+distribution is calibrated.
 
 Trade-off: lexical overlap is weaker than semantic embedding. A retrieval miss may
 therefore reflect the v0 backend rather than the experience-memory idea.
@@ -164,7 +164,7 @@ reasoning.
 ### D-08: Honest stop when the benchmark has no errors
 
 The first easy benchmark and the later hard benchmark were both solved perfectly by
-`deepseek-v4.1-flash` during feedback calibration. The runner records
+the previously configured `deepseek-v4.1-flash` during feedback calibration. The runner records
 `no_eligible_error_families` and stops.
 
 Reason: without an observed error, there is no correction to learn from and no
