@@ -1,4 +1,7 @@
-"""Small OpenAI-compatible client with caching and hard per-run budgets."""
+"""带缓存与硬预算的 OpenAI 兼容模型客户端。
+
+by AI.Coding
+"""
 
 from __future__ import annotations
 
@@ -52,7 +55,13 @@ class BudgetExceeded(RuntimeError):
 
 
 def _load_api_key() -> str:
-    for name in ("EXPERIENCE_LLM_API_KEY", "TOKENDANCE_API_KEY", "OPENAI_API_KEY"):
+    """按显式项目配置优先的顺序读取模型密钥。"""
+    for name in (
+        "EXPERIENCE_LLM_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "TOKENDANCE_API_KEY",
+        "OPENAI_API_KEY",
+    ):
         value = os.environ.get(name, "").strip()
         if value:
             return value
@@ -69,7 +78,7 @@ def _load_api_key() -> str:
         if match:
             return match.group(1).strip()
     raise RuntimeError(
-        "No API key found. Set EXPERIENCE_LLM_API_KEY or TOKENDANCE_API_KEY."
+        "No API key found. Set EXPERIENCE_LLM_API_KEY or DEEPSEEK_API_KEY."
     )
 
 
@@ -99,16 +108,19 @@ class LLMClient:
         base_url: str,
         cache_path: str | Path,
         temperature: float = 0.0,
+        reasoning_effort: str | None = None,
         max_new_calls: int = 120,
         max_total_tokens: int = 300_000,
         timeout_s: float = 120.0,
         max_retries: int = 3,
     ) -> None:
+        """初始化客户端、缓存、预算和可选推理强度。"""
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.cache_path = Path(cache_path)
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         self.temperature = temperature
+        self.reasoning_effort = reasoning_effort
         self.max_new_calls = max_new_calls
         self.max_total_tokens = max_total_tokens
         self.timeout_s = timeout_s
@@ -137,10 +149,12 @@ class LLMClient:
     def _cache_key(
         self, messages: Sequence[dict[str, str]], max_tokens: int, json_mode: bool
     ) -> str:
+        """把所有会改变响应的请求参数纳入缓存键。"""
         payload = {
             "model": self.model,
             "messages": list(messages),
             "temperature": self.temperature,
+            "reasoning_effort": self.reasoning_effort,
             "max_tokens": max_tokens,
             "json_mode": json_mode,
         }
@@ -174,6 +188,7 @@ class LLMClient:
         tag: str,
         json_mode: bool = False,
     ) -> LLMResult:
+        """在缓存与预算约束下完成一次可重试的模型请求。"""
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -215,6 +230,9 @@ class LLMClient:
             }
             if json_mode:
                 payload["response_format"] = {"type": "json_object"}
+            if self.reasoning_effort is not None:
+                # DeepSeek 官方接口用 none 关闭隐藏思考，避免长题耗尽可见输出预算。
+                payload["reasoning_effort"] = self.reasoning_effort
             started = time.perf_counter()
             try:
                 data = self._post(payload)

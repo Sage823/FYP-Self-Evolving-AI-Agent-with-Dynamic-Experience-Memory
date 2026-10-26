@@ -1,4 +1,7 @@
-"""Configuration loading and validation."""
+"""实验配置加载与校验。
+
+by AI.Coding
+"""
 
 from __future__ import annotations
 
@@ -7,6 +10,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 
 @dataclass(frozen=True)
 class ExperimentConfig:
@@ -14,6 +19,7 @@ class ExperimentConfig:
     model: str
     base_url: str
     temperature: float
+    reasoning_effort: str | None
     answer_max_tokens: int
     lesson_max_tokens: int
     repeats: int
@@ -28,7 +34,10 @@ class ExperimentConfig:
 
     @classmethod
     def load(cls, path: str | Path) -> "ExperimentConfig":
+        """加载项目本地环境变量和 JSON 实验配置。"""
         path = Path(path)
+        # 显式环境变量优先，本地 .env 只补充缺失值且始终由 Git 忽略。
+        load_dotenv(dotenv_path=path.parent.parent / ".env", override=False)
         raw = json.loads(path.read_text(encoding="utf-8"))
         model = os.environ.get("EXPERIENCE_LLM_MODEL", raw.get("model", "")).strip()
         base_url = os.environ.get("EXPERIENCE_LLM_BASE_URL", raw.get("base_url", "")).strip()
@@ -41,6 +50,11 @@ class ExperimentConfig:
             model=model,
             base_url=base_url,
             temperature=float(raw.get("temperature", 0.0)),
+            reasoning_effort=(
+                str(raw["reasoning_effort"]).strip()
+                if raw.get("reasoning_effort") is not None
+                else None
+            ),
             answer_max_tokens=int(raw.get("answer_max_tokens", 220)),
             lesson_max_tokens=int(raw.get("lesson_max_tokens", 320)),
             repeats=int(raw.get("repeats", 1)),
@@ -57,12 +71,15 @@ class ExperimentConfig:
         return cfg
 
     def validate(self) -> None:
+        """拒绝会让实验行为含糊或越过预算边界的配置。"""
         if not self.model:
             raise ValueError("model must be non-empty")
         if not self.base_url.startswith(("http://", "https://")):
             raise ValueError("base_url must be an HTTP(S) URL")
         if self.repeats < 1:
             raise ValueError("repeats must be at least 1")
+        if self.reasoning_effort not in {None, "none", "low", "high", "max"}:
+            raise ValueError("reasoning_effort must be none, low, high, max, or null")
         if self.top_k < 1 or self.embedding_dim < 64:
             raise ValueError("top_k must be >= 1 and embedding_dim >= 64")
         if not 0.0 <= self.min_similarity <= 1.0:

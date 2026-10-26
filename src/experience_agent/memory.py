@@ -1,18 +1,19 @@
-"""FAISS-backed experience memory with deterministic local hashed embeddings."""
+"""基于 ChromaDB 和确定性本地哈希向量的经验记忆。
+
+by AI.Coding
+"""
 
 from __future__ import annotations
 
 import re
+import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
+import chromadb
 import numpy as np
 from sklearn.feature_extraction.text import HashingVectorizer
-
-try:
-    import faiss
-except ImportError:  # pragma: no cover - exercised only in minimal environments
-    faiss = None
 
 
 def _memory_text(record: dict[str, Any]) -> str:
@@ -31,12 +32,20 @@ class SearchHit:
 
 @dataclass
 class ExperienceMemory:
+    """用 Chroma 集合保存经验，并用本地哈希向量执行检索。"""
+
     dimension: int = 2048
+    persist_directory: str | Path | None = None
+    collection_name: str = "experience_memory"
     records: list[dict[str, Any]] = field(default_factory=list)
-    _index: Any = field(default=None, init=False, repr=False)
-    _vectors: np.ndarray | None = field(default=None, init=False, repr=False)
+    _client: Any = field(default=None, init=False, repr=False)
+    _collection: Any = field(default=None, init=False, repr=False)
+    _records_by_id: dict[str, dict[str, Any]] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
+        """建立 Chroma 客户端、集合和本地向量器，并恢复已有记录。"""
         self._vectorizer = HashingVectorizer(
             n_features=self.dimension,
             alternate_sign=False,
@@ -45,10 +54,42 @@ class ExperienceMemory:
             ngram_range=(1, 2),
             lowercase=True,
         )
-        self._index = faiss.IndexFlatIP(self.dimension) if faiss is not None else None
-        self._vectors = np.empty((0, self.dimension), dtype=np.float32)
+        if self.persist_directory is None:
+            self._client = chromadb.EphemeralClient()
+            # 进程内的临时客户端共享状态，默认名称必须唯一以免不同维度互相冲突。
+            effective_collection_name = (
+                f"experience_memory_{uuid.uuid4().hex}"
+                if self.collection_name == "experience_memory"
+                else self.collection_name
+            )
+        else:
+            # 持久目录由每次实验独占，避免不同运行的经验相互污染。
+            directory = Path(self.persist_directory)
+            directory.mkdir(parents=True, exist_ok=True)
+            self._client = chromadb.PersistentClient(path=str(directory))
+            effective_collection_name = self.collection_name
+        self._collection = self._client.get_or_create_collection(
+            name=effective_collection_name,
+            embedding_function=None,
+            configuration={"hnsw": {"space": "cosine"}},
+        )
+        self._load_existing_records()
+
+    def _load_existing_records(self) -> None:
+        """从已有 Chroma 集合恢复用于返回检索结果的完整记录。"""
+        stored = self._collection.get(include=["documents", "metadatas"])
+        ids = stored.get("ids") or []
+        documents = stored.get("documents") or []
+        metadatas = stored.get("metadatas") or []
+        for index, record_id in enumerate(ids):
+            metadata = dict(metadatas[index] or {})
+            text = str(documents[index] or metadata.get("memory_text", ""))
+            metadata["memory_text"] = text
+            self.records.append(metadata)
+            self._records_by_id[str(record_id)] = metadata
 
     def _embed(self, texts: list[str]) -> np.ndarray:
+        """把文本转换为归一化、可复现且无需下载模型的稠密向量。"""
         matrix = self._vectorizer.transform(texts).astype(np.float32)
         embeddings = matrix.toarray()
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
@@ -56,40 +97,55 @@ class ExperienceMemory:
         return embeddings / norms
 
     def add(self, record: dict[str, Any]) -> bool:
-        """Add a record unless an identical memory text already exists."""
+        """把非空且不重复的经验写入 Chroma 集合。"""
         text = _memory_text(record)
         if not text:
             raise ValueError("memory record has no rule or trigger text")
         fingerprint = _normalise(text)
         if any(_normalise(_memory_text(existing)) == fingerprint for existing in self.records):
             return False
-        row = self._embed([text])
-        if self._index is not None:
-            self._index.add(row)
-        else:
-            self._vectors = np.vstack([self._vectors, row])
         enriched = dict(record)
         enriched["memory_text"] = text
+        row = self._embed([text])
+        record_id = f"memory_{uuid.uuid4().hex}"
+        # Chroma metadata 只接受标量；当前记录均为标量，仍过滤空值以保证接口稳定。
+        metadata = {
+            str(key): value
+            for key, value in enriched.items()
+            if value is not None and isinstance(value, (str, int, float, bool))
+        }
+        self._collection.add(
+            ids=[record_id],
+            embeddings=row.tolist(),
+            documents=[text],
+            metadatas=[metadata],
+        )
         self.records.append(enriched)
+        self._records_by_id[record_id] = enriched
         return True
 
     def search(self, query: str, k: int = 2, min_similarity: float = 0.0) -> list[SearchHit]:
+        """按余弦相似度返回不低于阈值的前 k 条经验。"""
         if not self.records:
             return []
         row = self._embed([query])
         k = min(k, len(self.records))
-        if self._index is not None:
-            scores, indexes = self._index.search(row, k)
-            pairs = zip(indexes[0].tolist(), scores[0].tolist())
-        else:
-            scores = (self._vectors @ row[0]).tolist()
-            ranked = sorted(enumerate(scores), key=lambda pair: pair[1], reverse=True)[:k]
-            pairs = ranked
+        result = self._collection.query(
+            query_embeddings=row.tolist(),
+            n_results=k,
+            include=["distances"],
+        )
+        ids = (result.get("ids") or [[]])[0]
+        distances = (result.get("distances") or [[]])[0]
         hits = []
-        for index, score in pairs:
-            if index < 0 or float(score) < min_similarity:
+        for record_id, distance in zip(ids, distances):
+            # Chroma 的 cosine 返回距离，因此相似度为 1 - distance。
+            score = 1.0 - float(distance)
+            if score < min_similarity:
                 continue
-            hits.append(SearchHit(self.records[int(index)], float(score)))
+            record = self._records_by_id.get(str(record_id))
+            if record is not None:
+                hits.append(SearchHit(record, score))
         return hits
 
     def __len__(self) -> int:
@@ -97,7 +153,8 @@ class ExperienceMemory:
 
     @property
     def backend(self) -> str:
-        return "faiss" if self._index is not None else "numpy"
+        """返回当前向量存储后端名称。"""
+        return "chromadb"
 
 
 def _normalise(text: str) -> str:

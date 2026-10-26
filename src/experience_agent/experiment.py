@@ -1,4 +1,7 @@
-"""End-to-end learning-loop runner for the single-model v0 pilot."""
+"""单模型 v0 试验的端到端学习循环调度器。
+
+by AI.Coding
+"""
 
 from __future__ import annotations
 
@@ -39,6 +42,7 @@ class ExperimentRunner:
         output_dir: str | Path | None = None,
         offline: bool = False,
     ) -> None:
+        """加载配置与题库，并建立真实或离线模型客户端。"""
         self.root = Path(root).resolve()
         self.config_path = Path(config_path)
         if not self.config_path.is_absolute():
@@ -68,6 +72,7 @@ class ExperimentRunner:
                 base_url=self.config.base_url,
                 cache_path=self.root / "results" / "cache" / "llm_cache.jsonl",
                 temperature=self.config.temperature,
+                reasoning_effort=self.config.reasoning_effort,
                 max_new_calls=self.config.max_new_calls,
                 max_total_tokens=self.config.max_total_tokens,
             )
@@ -176,8 +181,18 @@ class ExperimentRunner:
         eligible: set[str],
         family_errors: dict[str, list[dict[str, Any]]],
     ) -> tuple[ExperienceMemory, ExperienceMemory]:
-        raw = ExperienceMemory(dimension=self.config.embedding_dim)
-        lesson = ExperienceMemory(dimension=self.config.embedding_dim)
+        """为原始纠正和抽象经验建立相互隔离的持久 Chroma 集合。"""
+        chroma_directory = self.output_dir / "chroma"
+        raw = ExperienceMemory(
+            dimension=self.config.embedding_dim,
+            persist_directory=chroma_directory,
+            collection_name="raw_corrections",
+        )
+        lesson = ExperienceMemory(
+            dimension=self.config.embedding_dim,
+            persist_directory=chroma_directory,
+            collection_name="abstract_lessons",
+        )
         errors_by_id = {
             row["item_id"]: row
             for family in family_errors.values()
@@ -230,9 +245,13 @@ class ExperimentRunner:
         raw_memory: ExperienceMemory,
         lesson_memory: ExperienceMemory,
     ) -> None:
+        """只对达到反馈错误阈值的题族执行迁移实验。"""
         conditions = list(self.config.conditions)
         for repeat in range(self.config.repeats):
-            ordered = list(self.groups["followup"])
+            # 未入选题族不进入主要迁移分析，跳过它们可避免无效模型调用。
+            ordered = [
+                item for item in self.groups["followup"] if item.family in eligible
+            ]
             random.Random(20261023 + repeat).shuffle(ordered)
             for item in ordered:
                 for condition in conditions:
