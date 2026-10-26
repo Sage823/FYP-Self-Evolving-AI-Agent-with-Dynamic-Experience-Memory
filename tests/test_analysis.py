@@ -71,3 +71,31 @@ def test_report_does_not_multiply_relative_reduction_twice() -> None:
 
     assert "33.3%" in report
     assert "3333.3%" not in report
+
+
+def test_incomplete_answers_are_excluded_from_repeated_error_rate() -> None:
+    base = {
+        "item_id": "q1",
+        "family": "f",
+        "split": "followup",
+        "repeat": 0,
+        "retrieved_count": 0,
+        "retrieval_hit": False,
+        "answer_valid": True,
+    }
+    rows = [
+        {**base, "condition": "N", "correct": False, "status": "COMPLETE_WRONG"},
+        {**base, "condition": "R", "correct": True, "status": "COMPLETE_CORRECT"},
+        {
+            **base,
+            "condition": "L",
+            "correct": False,
+            "answer_valid": False,
+            "status": "TRUNCATED",
+        },
+    ]
+    summary = analyse(rows, eligible_families={"f"})
+    assert summary["conditions"]["L"]["items"] == 0
+    assert summary["conditions"]["L"]["excluded_items"] == 1
+    assert summary["excluded_answers"] == 1
+    assert summary["paired_contrasts"]["R_vs_N"]["left_repeated_error_rate"] == 0.0

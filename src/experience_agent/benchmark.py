@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Iterable
 
 
-SPLITS = {"feedback", "followup", "unrelated"}
+SPLITS = {"baseline", "feedback", "validation", "followup", "unrelated"}
+REQUIRED_SPLITS = {"feedback", "followup", "unrelated"}
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,15 @@ def normalize_answer(text: str) -> str:
     return text.upper()
 
 
+def parse_final_answer(text: str) -> str | None:
+    """Return the final strict ``Answer:`` value, or None for a format failure."""
+    matches = re.findall(r"(?im)^\s*Answer\s*:\s*(.+?)\s*$", text)
+    if not matches:
+        return None
+    value = normalize_answer(matches[-1])
+    return value or None
+
+
 def load_benchmark(path: str | Path) -> list[BenchmarkItem]:
     path = Path(path)
     items: list[BenchmarkItem] = []
@@ -97,10 +107,17 @@ def validate_benchmark(items: Iterable[BenchmarkItem]) -> None:
             "feedback and follow-up families differ: "
             f"feedback={sorted(feedback_families)}, followup={sorted(followup_families)}"
         )
+    for optional_split in ("baseline", "validation"):
+        families = {item.family for item in items if item.split == optional_split}
+        if families and families != feedback_families:
+            raise ValueError(
+                f"{optional_split} families differ from feedback: "
+                f"{optional_split}={sorted(families)}, feedback={sorted(feedback_families)}"
+            )
     unrelated_families = {item.family for item in items if item.split == "unrelated"}
     if unrelated_families != {"unrelated"}:
         raise ValueError("unrelated split must use family='unrelated' only")
-    for split in SPLITS:
+    for split in REQUIRED_SPLITS:
         if not any(item.split == split for item in items):
             raise ValueError(f"benchmark has no {split} items")
     for item in items:

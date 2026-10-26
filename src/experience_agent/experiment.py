@@ -13,12 +13,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .agent import ExperienceAgent
+from .agent import AnswerStatus, ExperienceAgent
 from .analysis import write_analysis
 from .benchmark import BenchmarkItem, load_benchmark, split_items
 from .config import ExperimentConfig
 from .llm import LLMClient, MockLLM
 from .memory import ExperienceMemory
+
+
+_COMPLETE_STATUSES = {
+    AnswerStatus.COMPLETE_CORRECT.value,
+    AnswerStatus.COMPLETE_WRONG.value,
+}
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -98,37 +104,80 @@ class ExperimentRunner:
             model=self.client.model,
             benchmark=str(self.benchmark_path),
         )
-        feedback_rows = self._run_feedback_baseline()
-        family_errors: dict[str, list[dict[str, Any]]] = {}
-        for row in feedback_rows:
-            if not row["correct"]:
-                family_errors.setdefault(row["family"], []).append(row)
-        feedback_counts: dict[str, int] = {}
-        for item in self.groups["feedback"]:
-            feedback_counts[item.family] = feedback_counts.get(item.family, 0) + 1
+        baseline_items = self.groups.get("baseline", [])
+        if baseline_items:
+            selection_rows = self._run_answer_set(baseline_items, phase="baseline")
+            feedback_rows = self._run_answer_set(
+                self.groups["feedback"], phase="feedback"
+            )
+            selection_source = "independent_baseline_split"
+        else:
+            # Backward compatibility for benchmarks created before the baseline
+            # and retrieval-validation splits existed.
+            selection_rows = self._run_answer_set(
+                self.groups["feedback"], phase="feedback"
+            )
+            feedback_rows = selection_rows
+            selection_source = "feedback_fallback"
+
+        selection_valid = [
+            row for row in selection_rows if row["status"] in _COMPLETE_STATUSES
+        ]
+        selection_counts: dict[str, int] = {}
+        for row in selection_valid:
+            selection_counts[row["family"]] = selection_counts.get(row["family"], 0) + 1
+        selection_errors: dict[str, int] = {}
+        for row in selection_valid:
+            if row["status"] == AnswerStatus.COMPLETE_WRONG.value:
+                selection_errors[row["family"]] = (
+                    selection_errors.get(row["family"], 0) + 1
+                )
+        selection_rates = {
+            family: selection_errors.get(family, 0) / count
+            for family, count in sorted(selection_counts.items())
+        }
         eligible = {
             family
-            for family, errors in family_errors.items()
-            if len(errors) / feedback_counts[family] >= self.config.feedback_error_threshold
+            for family, rate in selection_rates.items()
+            if rate >= self.config.feedback_error_threshold
         }
+
+        family_errors: dict[str, list[dict[str, Any]]] = {}
+        for row in feedback_rows:
+            if row["status"] == AnswerStatus.COMPLETE_WRONG.value:
+                family_errors.setdefault(row["family"], []).append(row)
         self._event(
             "family_selection",
-            feedback_error_rate={
-                family: len(family_errors.get(family, [])) / count
-                for family, count in sorted(feedback_counts.items())
-            },
+            source=selection_source,
+            baseline_error_rate=selection_rates,
             eligible_families=sorted(eligible),
         )
         if not eligible:
             summary = {
                 "status": "no_eligible_error_families",
-                "feedback_error_rate": {
-                    family: len(family_errors.get(family, [])) / count
-                    for family, count in sorted(feedback_counts.items())
-                },
+                "selection_source": selection_source,
+                "selection_error_rate": selection_rates,
+                "selection_status_counts": _status_counts(selection_rows),
                 "message": (
-                    "No family crossed the feedback error threshold. The agent is too strong "
-                    "for this benchmark; design harder items before testing memory transfer."
+                    "No family crossed the error threshold on the independent baseline "
+                    "(or feedback fallback). Invalid model outputs were excluded from the "
+                    "error-rate denominator."
+                ),
+            }
+            _write_json(self.output_dir / "summary.json", summary)
+            return summary
+
+        if not family_errors:
+            summary = {
+                "status": "no_learnable_errors",
+                "selection_source": selection_source,
+                "eligible_families": sorted(eligible),
+                "selection_error_rate": selection_rates,
+                "selection_status_counts": _status_counts(selection_rows),
+                "feedback_status_counts": _status_counts(feedback_rows),
+                "message": (
+                    "Families qualified on baseline, but the feedback split produced no "
+                    "COMPLETE_WRONG answer from which a correction could be learned."
                 ),
             }
             _write_json(self.output_dir / "summary.json", summary)
@@ -143,8 +192,13 @@ class ExperimentRunner:
                 "status": "completed",
                 "offline": self.offline,
                 "model": self.client.model,
+                "selection_source": selection_source,
+                "selection_error_rate": selection_rates,
+                "selection_status_counts": _status_counts(selection_rows),
+                "feedback_status_counts": _status_counts(feedback_rows),
                 "memory_records": {"R": len(raw_memory), "L": len(lesson_memory)},
                 "memory_backend": raw_memory.backend,
+                "embedding_backend": raw_memory.embedding_name,
                 "usage_all_invocations": self.client.usage.as_dict(),
                 "usage_billable": self.client.billable_usage.as_dict(),
                 "new_llm_calls": self.client.new_calls,
@@ -158,21 +212,30 @@ class ExperimentRunner:
         self._event("run_completed", status="completed", **summary["usage_billable"])
         return summary
 
-    def _run_feedback_baseline(self) -> list[dict[str, Any]]:
+    def _run_answer_set(
+        self,
+        items: list[BenchmarkItem],
+        *,
+        phase: str,
+    ) -> list[dict[str, Any]]:
+        """Run one no-memory pass for a named development split."""
         rows: list[dict[str, Any]] = []
-        for item in self.groups["feedback"]:
+        for item in items:
             answer = self.agent.answer(item, memories=[])
             row = self._base_row(item, condition="N", repeat=0)
             row.update(answer.as_dict())
+            row["phase"] = phase
             rows.append(row)
             self.rows.append(row)
             self._event(
-                "feedback_baseline",
+                f"{phase}_answer",
                 item_id=item.id,
                 family=item.family,
                 predicted=answer.answer,
                 gold=item.answer,
                 correct=answer.correct,
+                status=answer.status,
+                finish_reason=answer.finish_reason,
             )
         return rows
 
@@ -185,11 +248,15 @@ class ExperimentRunner:
         chroma_directory = self.output_dir / "chroma"
         raw = ExperienceMemory(
             dimension=self.config.embedding_dim,
+            embedding_backend=self.config.retrieval_backend,
+            embedding_model=self.config.embedding_model,
             persist_directory=chroma_directory,
             collection_name="raw_corrections",
         )
         lesson = ExperienceMemory(
             dimension=self.config.embedding_dim,
+            embedding_backend=self.config.retrieval_backend,
+            embedding_model=self.config.embedding_model,
             persist_directory=chroma_directory,
             collection_name="abstract_lessons",
         )
@@ -289,11 +356,12 @@ class ExperimentRunner:
         repeat: int,
         memory: ExperienceMemory | None,
     ) -> None:
+        top_k, min_similarity = self._retrieval_params(condition)
         hits = (
             memory.search(
                 item.question,
-                k=self.config.top_k,
-                min_similarity=self.config.min_similarity,
+                k=top_k,
+                min_similarity=min_similarity,
             )
             if memory is not None
             else []
@@ -326,7 +394,16 @@ class ExperimentRunner:
             correct=answer.correct,
             retrieved=[record.get("source_id") for record in retrieved],
             retrieval_scores=[round(hit.score, 5) for hit in hits],
+            status=answer.status,
+            finish_reason=answer.finish_reason,
         )
+
+    def _retrieval_params(self, condition: str) -> tuple[int, float]:
+        if condition == "R":
+            return self.config.raw_top_k, self.config.raw_min_similarity
+        if condition == "L":
+            return self.config.lesson_top_k, self.config.lesson_min_similarity
+        return self.config.top_k, self.config.min_similarity
 
     @staticmethod
     def _base_row(item: BenchmarkItem, *, condition: str, repeat: int) -> dict[str, Any]:
@@ -340,4 +417,12 @@ class ExperimentRunner:
             "question": item.question,
             "gold": item.answer,
         }
+
+
+def _status_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        status = str(row.get("status", "UNKNOWN"))
+        counts[status] = counts.get(status, 0) + 1
+    return dict(sorted(counts.items()))
 

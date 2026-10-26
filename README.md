@@ -15,8 +15,12 @@ Version `v0` implements the complete minimal learning loop:
 5. report repeated-error rate, retrieval hit rate, paired contrasts, and unrelated
    question safety.
 
-The repository has validated v0 and BBH-inspired 32-item benchmarks, 14 passing tests, an offline
-end-to-end smoke mode, response caching, and hard per-run call/token budgets.
+The repository has validated BBH-inspired benchmarks, 23 passing tests, an
+offline end-to-end mode, response caching, and hard per-run call/token budgets.
+The v3 protocol has separate baseline, feedback, retrieval-validation, follow-up,
+and unrelated splits. Responses are classified as complete-correct,
+complete-wrong, truncated, empty, malformed, or API error; only complete answers
+enter repeated-error metrics.
 
 On 2026-10-23 the previously configured model (`deepseek-v4.1-flash`) answered all eight
 feedback items correctly on the current hard benchmark. The runner therefore
@@ -24,12 +28,9 @@ stopped before inventing an effect or storing lessons from non-errors. This is a
 benchmark-calibration result, not evidence for or against experience memory. It
 motivated the harder BBH-inspired task distribution described below.
 
-That milestone is now represented by `benchmark_bbh_v2.jsonl`. A real
-`deepseek-flash` run produced six feedback errors, persisted six raw corrections
-and six abstracted lessons in ChromaDB, and completed all three experimental
-conditions. In this small pilot, raw correction memory reduced repeated errors
-from 56.25% to 37.5%, while abstracted lessons did not improve the aggregate rate;
-the paired result was not statistically significant and is not a final claim.
+The earlier `benchmark_bbh_v2.jsonl` run produced failures, but several were
+output-length truncations rather than genuine reasoning errors. Those observations
+motivated the stricter v3 workflow; they are not treated as a memory effect.
 
 ## System
 
@@ -38,7 +39,7 @@ question
    |
    +-- no memory / raw correction memory / abstract lesson memory
    |          |
-   |          +-- local hashed embeddings stored and queried in ChromaDB
+   |          +-- hashing or sentence-transformers embeddings in ChromaDB
    |
    +-- answer
           |
@@ -58,12 +59,16 @@ Python 3.10+ is required.
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev]"                 # hash baseline only
+# or: python -m pip install -e ".[dev,semantic]"  # adds MiniLM/PyTorch
 python -m experience_agent validate
 python -m pytest
 python -m experience_agent run --offline --output results/runs/offline_smoke
-python -m experience_agent.bbh_benchmark --difficulty 2 --output data/benchmark_bbh_v2.jsonl
-python -m experience_agent run --config config/experiment_bbh_v2.json
+python -m experience_agent.bbh_benchmark --difficulty 2 `
+  --with-development-splits --output data/benchmark_bbh_v3.jsonl
+python -m experience_agent.calibration --backends hashing,sentence_transformers
+python -m experience_agent run --config config/experiment_bbh_v3.json
+python -m experience_agent run --config config/experiment_bbh_v3_semantic.json
 ```
 
 For a real model run, set the API key in the shell. The client also supports an
@@ -71,43 +76,45 @@ existing local DSH credential store, but never writes a key into the repository.
 
 ```powershell
 $env:DEEPSEEK_API_KEY = "<key>"
-python -m experience_agent run --config config/experiment_v0.json
+python -m experience_agent run --config config/experiment_bbh_v3_semantic.json
 ```
 
 Generated runs are written under `results/runs/` and are intentionally ignored by
 Git. Commit only reviewed summaries or conclusions, not raw API caches or secrets.
 
-## Design
+## Experimental protocol
 
-The benchmark contains four error families:
+The v3 benchmark contains four error families:
 
 | Family | Task |
 |---|---|
-| `E1_constraint_order` | six-person ordering with gap and adjacency constraints |
-| `E2_status_precedence` | ordered decision rules where earlier rules override later ones |
-| `E3_charge_rules` | conditional discounts and shipping calculations |
-| `E4_protocol_triage` | synthetic educational protocol application |
+| `B1_state_tracking` | long state-update sequences |
+| `B2_boolean_logic` | deeply nested Boolean expressions |
+| `B3_date_arithmetic` | sequential date arithmetic |
+| `B4_dyck_completion` | bracket-stack completion |
 
-Each family has 2 feedback and 4 follow-up items. Eight unrelated arithmetic or
-language questions provide a basic safety check. Every mode uses the same model,
-prompt, temperature, and retrieval settings; only memory contents differ.
+Each family has 2 baseline, 2 feedback, 2 validation, and 4 follow-up items.
+Eight unrelated items provide a safety check. Baseline selects error families;
+feedback creates memory; validation calibrates retrieval; follow-up evaluates
+transfer. Follow-up items are never used to select models or retrieval thresholds.
 
-The primary outcome is repeated-error rate on follow-up items from families where
-at least one feedback error was observed. The runner also records exact McNemar
-tests, retrieval hit rate, unrelated accuracy, API usage, and a complete JSONL
-event trace.
+The primary outcome is repeated-error rate on follow-up items whose status is
+`COMPLETE_WRONG`. Truncated, empty, malformed, and API-error responses are reported
+separately and excluded from the analysis denominator.
 
 See [the experiment manual](docs/EXPERIMENT_MANUAL.md) for design decisions,
 trade-offs, troubleshooting, and the next experimental steps. A draft aligned to
 the monthly report template is in
-[the October progress notes](docs/PROGRESS_REPORT_NOTES_2026-10.md).
+[the October progress notes](docs/PROGRESS_REPORT_NOTES_2026-10.md). A step-by-step
+introduction to the new status, baseline, calibration, and Git workflow is in
+[the beginner workflow guide](docs/BEGINNER_WORKFLOW.md).
 
 ## Repository layout
 
 ```text
 config/                  frozen v0 runtime settings
 data/                    versioned benchmark items
-src/experience_agent/    client, agent, memory, runner, and analysis
+src/experience_agent/    client, agent, memory, calibration, runner, analysis
 tests/                   offline unit and end-to-end tests
 docs/                    experiment manual and progress-report notes
 results/                 generated runs (Git-ignored)
@@ -119,8 +126,8 @@ results/                 generated runs (Git-ignored)
 - Empty or length-capped replies are retried with a larger completion budget and
   are never cached as answers.
 - A run stops at 120 new model calls and 300,000 billed tokens by default.
-- Retrieval uses a 2,048-dimensional local hashing vectorizer with persistent
-  ChromaDB collections, avoiding embedding-model downloads and per-query embedding cost.
+- Retrieval supports a deterministic local hashing baseline and optional
+  sentence-transformers embeddings with persistent ChromaDB collections.
 - The v0 run uses one repeat because it is a pipeline pilot, not a final
   statistical study.
 

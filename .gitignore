@@ -17,6 +17,7 @@ credentials.json
 # Generated experiment outputs and response caches
 results/runs/
 results/cache/
+results/calibration/
 results/*.jsonl
 results/*.csv
 results/*.md

@@ -48,10 +48,43 @@ class LLMResult:
     usage: Usage
     cached: bool
     latency_s: float
+    finish_reason: str | None = None
+    attempts: int = 1
 
 
 class BudgetExceeded(RuntimeError):
     """Raised before a run exceeds its explicit API-call or token budget."""
+
+
+class ResponseQualityError(RuntimeError):
+    """A provider response that must not enter the experiment as an answer."""
+
+    status: str = "RESPONSE_ERROR"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        text: str = "",
+        finish_reason: str | None = None,
+        attempts: int = 1,
+    ) -> None:
+        super().__init__(message)
+        self.text = text
+        self.finish_reason = finish_reason
+        self.attempts = attempts
+
+
+class EmptyResponseError(ResponseQualityError):
+    status = "EMPTY"
+
+
+class TruncatedResponseError(ResponseQualityError):
+    status = "TRUNCATED"
+
+
+class APIRequestError(RuntimeError):
+    """A transport or provider request failure after bounded retries."""
 
 
 def _load_api_key() -> str:
@@ -152,6 +185,7 @@ class LLMClient:
         """把所有会改变响应的请求参数纳入缓存键。"""
         payload = {
             "model": self.model,
+            "base_url": self.base_url,
             "messages": list(messages),
             "temperature": self.temperature,
             "reasoning_effort": self.reasoning_effort,
@@ -210,6 +244,8 @@ class LLMClient:
                     usage=usage,
                     cached=True,
                     latency_s=float(cached.get("latency_s", 0.0)),
+                finish_reason=cached.get("finish_reason"),
+                attempts=0,
                 )
             if self.new_calls >= self.max_new_calls:
                 raise BudgetExceeded(
@@ -238,9 +274,19 @@ class LLMClient:
                 data = self._post(payload)
                 choice = (data.get("choices") or [{}])[0]
                 text = str((choice.get("message") or {}).get("content") or "").strip()
+                finish_reason = choice.get("finish_reason")
                 if not text:
-                    raise RuntimeError(
-                        f"empty model reply (finish_reason={choice.get('finish_reason')})"
+                    raise EmptyResponseError(
+                        f"empty model reply (finish_reason={finish_reason})",
+                        finish_reason=finish_reason,
+                        attempts=attempt,
+                    )
+                if finish_reason == "length":
+                    raise TruncatedResponseError(
+                        "model reply reached the completion limit before finishing",
+                        text=text,
+                        finish_reason=finish_reason,
+                        attempts=attempt,
                     )
                 raw_usage = data.get("usage") or {}
                 usage = Usage(
@@ -267,7 +313,7 @@ class LLMClient:
                         "calls": 1,
                     },
                     "latency_s": round(latency, 4),
-                    "finish_reason": choice.get("finish_reason"),
+                    "finish_reason": finish_reason,
                 }
                 self._cache[key] = record
                 self._append_cache(record)
@@ -277,12 +323,14 @@ class LLMClient:
                     usage=usage,
                     cached=False,
                     latency_s=latency,
+                    finish_reason=finish_reason,
+                    attempts=attempt,
                 )
             except BudgetExceeded:
                 raise
             except urllib.error.HTTPError as exc:
                 if exc.code in {401, 403, 404}:
-                    raise RuntimeError(
+                    raise APIRequestError(
                         f"provider rejected model or credentials with HTTP {exc.code}"
                     ) from exc
                 last_error = exc
@@ -294,7 +342,11 @@ class LLMClient:
                 if attempt == self.max_retries:
                     break
                 time.sleep(min(8.0, 1.5 ** attempt))
-        raise RuntimeError(f"LLM call failed after {self.max_retries} attempts: {last_error}")
+        if isinstance(last_error, ResponseQualityError):
+            raise last_error
+        raise APIRequestError(
+            f"LLM call failed after {self.max_retries} attempts: {last_error}"
+        ) from last_error
 
 
 class MockLLM:
@@ -340,5 +392,7 @@ class MockLLM:
             usage=usage,
             cached=False,
             latency_s=0.0,
+            finish_reason="stop",
+            attempts=1,
         )
 

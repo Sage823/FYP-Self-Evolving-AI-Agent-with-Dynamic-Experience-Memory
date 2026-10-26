@@ -29,3 +29,19 @@ def test_offline_pipeline_completes(tmp_path: Path) -> None:
     assert (tmp_path / "run" / "per_item.csv").exists()
     assert (tmp_path / "run" / "report.md").exists()
 
+
+def test_offline_v3_uses_independent_baseline_split(tmp_path: Path) -> None:
+    runner = ExperimentRunner(
+        root=ROOT,
+        config_path="config/experiment_bbh_v3.json",
+        output_dir=tmp_path / "run-v3",
+        offline=True,
+    )
+    summary = runner.run()
+
+    assert summary["status"] == "completed"
+    assert summary["selection_source"] == "independent_baseline_split"
+    assert "baseline" in runner.groups
+    assert "validation" in runner.groups
+    assert summary["all_result_status_counts"]
+

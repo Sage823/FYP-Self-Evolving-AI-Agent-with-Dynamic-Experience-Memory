@@ -67,3 +67,10 @@ def test_chroma_memory_can_be_reopened(tmp_path: Path) -> None:
     assert hits
     assert hits[0].record["error_type"] == "quantifier"
 
+
+def test_hashing_backend_reports_embedding_metadata() -> None:
+    memory = ExperienceMemory(dimension=128, embedding_backend="hashing")
+    assert memory.backend == "chromadb"
+    assert memory.embedding_name.startswith("hashing:")
+    assert memory.embedding_dimension == 128
+

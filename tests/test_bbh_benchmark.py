@@ -43,3 +43,19 @@ def test_bbh_v2_is_valid_and_materially_longer() -> None:
     v1_feedback_chars = sum(len(item.question) for item in v1 if item.split == "feedback")
     v2_feedback_chars = sum(len(item.question) for item in v2 if item.split == "feedback")
     assert v2_feedback_chars > v1_feedback_chars * 1.7
+
+
+def test_calibrated_benchmark_has_independent_development_splits() -> None:
+    """Baseline selects families, validation calibrates retrieval, follow-up evaluates."""
+    items = build_benchmark(difficulty=2, with_development_splits=True)
+    validate_benchmark(items)
+    stats = benchmark_stats(items)
+
+    assert stats["total"] == 48
+    assert stats["by_split"] == {
+        "baseline": 8,
+        "feedback": 8,
+        "followup": 16,
+        "unrelated": 8,
+        "validation": 8,
+    }

@@ -4,10 +4,20 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
-from .benchmark import BenchmarkItem, normalize_answer
-from .llm import LLMClient, MockLLM, extract_json
+from .benchmark import BenchmarkItem, parse_final_answer
+from .llm import (
+    APIRequestError,
+    BudgetExceeded,
+    EmptyResponseError,
+    LLMClient,
+    MockLLM,
+    ResponseQualityError,
+    TruncatedResponseError,
+    extract_json,
+)
 
 
 ANSWER_SYSTEM = """You answer one objective question.
@@ -58,13 +68,33 @@ class AnswerResult:
     raw_text: str
     answer: str
     correct: bool
+    status: str
+    finish_reason: str | None = None
+    detail: str = ""
+
+    @property
+    def is_complete(self) -> bool:
+        return self.status in {"COMPLETE_CORRECT", "COMPLETE_WRONG"}
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "raw_text": self.raw_text,
             "answer": self.answer,
             "correct": self.correct,
+            "status": self.status,
+            "finish_reason": self.finish_reason,
+            "status_detail": self.detail,
+            "answer_valid": self.is_complete,
         }
+
+
+class AnswerStatus(str, Enum):
+    COMPLETE_CORRECT = "COMPLETE_CORRECT"
+    COMPLETE_WRONG = "COMPLETE_WRONG"
+    TRUNCATED = "TRUNCATED"
+    EMPTY = "EMPTY"
+    FORMAT_ERROR = "FORMAT_ERROR"
+    API_ERROR = "API_ERROR"
 
 
 @dataclass
@@ -95,17 +125,69 @@ class ExperienceAgent:
             user = ANSWER_WITH_MEMORY.format(memory_block=block, question=item.question)
         else:
             user = ANSWER_WITHOUT_MEMORY.format(question=item.question)
-        result = self.client.complete(
-            system=ANSWER_SYSTEM,
-            user=user,
-            max_tokens=self.config.answer_max_tokens,
-            tag=f"answer:{item.id}",
-        )
-        answer = normalize_answer(result.text)
+        try:
+            result = self.client.complete(
+                system=ANSWER_SYSTEM,
+                user=user,
+                max_tokens=self.config.answer_max_tokens,
+                tag=f"answer:{item.id}",
+            )
+        except TruncatedResponseError as exc:
+            return AnswerResult(
+                raw_text=exc.text,
+                answer="",
+                correct=False,
+                status=AnswerStatus.TRUNCATED.value,
+                finish_reason=exc.finish_reason,
+                detail=str(exc),
+            )
+        except EmptyResponseError as exc:
+            return AnswerResult(
+                raw_text=exc.text,
+                answer="",
+                correct=False,
+                status=AnswerStatus.EMPTY.value,
+                finish_reason=exc.finish_reason,
+                detail=str(exc),
+            )
+        except ResponseQualityError as exc:
+            return AnswerResult(
+                raw_text=exc.text,
+                answer="",
+                correct=False,
+                status=exc.status,
+                finish_reason=exc.finish_reason,
+                detail=str(exc),
+            )
+        except APIRequestError as exc:
+            return AnswerResult(
+                raw_text="",
+                answer="",
+                correct=False,
+                status=AnswerStatus.API_ERROR.value,
+                detail=str(exc),
+            )
+        answer = parse_final_answer(result.text)
+        if answer is None:
+            return AnswerResult(
+                raw_text=result.text,
+                answer="",
+                correct=False,
+                status=AnswerStatus.FORMAT_ERROR.value,
+                finish_reason=result.finish_reason,
+                detail="response did not end with an Answer: line",
+            )
+        correct = answer == item.answer
         return AnswerResult(
             raw_text=result.text,
             answer=answer,
-            correct=answer == item.answer,
+            correct=correct,
+            status=(
+                AnswerStatus.COMPLETE_CORRECT.value
+                if correct
+                else AnswerStatus.COMPLETE_WRONG.value
+            ),
+            finish_reason=result.finish_reason,
         )
 
     def extract_lesson(
@@ -143,6 +225,8 @@ class ExperienceAgent:
                 if len(rule.split()) > 45 or len(trigger.split()) > 20:
                     raise ValueError("lesson is longer than the v0 limits")
                 return Lesson(rule=rule, trigger=trigger, error_type_guess=error_type)
+            except BudgetExceeded:
+                raise
             except Exception as exc:  # Try the next response-format strategy.
                 errors.append(f"{type(exc).__name__}: {exc}")
         raise RuntimeError(f"could not extract a valid lesson for {item.id}: {errors}")

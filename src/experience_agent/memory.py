@@ -13,7 +13,8 @@ from typing import Any
 
 import chromadb
 import numpy as np
-from sklearn.feature_extraction.text import HashingVectorizer
+
+from .embedding import create_embedder
 
 
 def _memory_text(record: dict[str, Any]) -> str:
@@ -32,9 +33,11 @@ class SearchHit:
 
 @dataclass
 class ExperienceMemory:
-    """用 Chroma 集合保存经验，并用本地哈希向量执行检索。"""
+    """用 Chroma 集合保存经验，并通过可替换的 embedding backend 检索。"""
 
     dimension: int = 2048
+    embedding_backend: str = "hashing"
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     persist_directory: str | Path | None = None
     collection_name: str = "experience_memory"
     records: list[dict[str, Any]] = field(default_factory=list)
@@ -45,14 +48,11 @@ class ExperienceMemory:
     )
 
     def __post_init__(self) -> None:
-        """建立 Chroma 客户端、集合和本地向量器，并恢复已有记录。"""
-        self._vectorizer = HashingVectorizer(
-            n_features=self.dimension,
-            alternate_sign=False,
-            norm="l2",
-            analyzer="word",
-            ngram_range=(1, 2),
-            lowercase=True,
+        """建立 Chroma 客户端、embedding backend 和集合，并恢复已有记录。"""
+        self._embedder = create_embedder(
+            self.embedding_backend,
+            dimension=self.dimension,
+            model_name=self.embedding_model,
         )
         if self.persist_directory is None:
             self._client = chromadb.EphemeralClient()
@@ -72,8 +72,29 @@ class ExperienceMemory:
             name=effective_collection_name,
             embedding_function=None,
             configuration={"hnsw": {"space": "cosine"}},
+            metadata={
+                "embedding_backend": self._embedder.name,
+                "embedding_model": self._embedder.model_name,
+                "embedding_dimension": self._embedder.dimension,
+            },
         )
+        self._verify_embedding_metadata()
         self._load_existing_records()
+
+    def _verify_embedding_metadata(self) -> None:
+        metadata = dict(self._collection.metadata or {})
+        expected = {
+            "embedding_backend": self._embedder.name,
+            "embedding_model": self._embedder.model_name,
+            "embedding_dimension": self._embedder.dimension,
+        }
+        for key, value in expected.items():
+            if key in metadata and metadata[key] != value:
+                raise ValueError(
+                    f"Chroma collection {self.collection_name!r} uses {key}={metadata[key]!r}, "
+                    f"but the new configuration requests {value!r}. Use a new run directory or "
+                    "collection name."
+                )
 
     def _load_existing_records(self) -> None:
         """从已有 Chroma 集合恢复用于返回检索结果的完整记录。"""
@@ -89,12 +110,8 @@ class ExperienceMemory:
             self._records_by_id[str(record_id)] = metadata
 
     def _embed(self, texts: list[str]) -> np.ndarray:
-        """把文本转换为归一化、可复现且无需下载模型的稠密向量。"""
-        matrix = self._vectorizer.transform(texts).astype(np.float32)
-        embeddings = matrix.toarray()
-        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-        norms[norms == 0] = 1.0
-        return embeddings / norms
+        """把文本转换为当前 backend 的归一化向量。"""
+        return np.asarray(self._embedder.embed(texts), dtype=np.float32)
 
     def add(self, record: dict[str, Any]) -> bool:
         """把非空且不重复的经验写入 Chroma 集合。"""
@@ -155,6 +172,16 @@ class ExperienceMemory:
     def backend(self) -> str:
         """返回当前向量存储后端名称。"""
         return "chromadb"
+
+    @property
+    def embedding_name(self) -> str:
+        """返回 Chroma 上层的 embedding 实现名称。"""
+        return f"{self._embedder.name}:{self._embedder.model_name}"
+
+    @property
+    def embedding_dimension(self) -> int:
+        """Return the actual backend dimension (384 for MiniLM, for example)."""
+        return self._embedder.dimension
 
 
 def _normalise(text: str) -> str:

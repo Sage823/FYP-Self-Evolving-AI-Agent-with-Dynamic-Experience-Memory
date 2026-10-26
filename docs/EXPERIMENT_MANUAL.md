@@ -38,12 +38,16 @@ claim.
 
 | Split | Count | Purpose |
 |---|---:|---|
+| baseline | 8 | select error families without using feedback or follow-up |
 | feedback | 8 | measure initial errors and create memories |
+| validation | 8 | compare embeddings and calibrate retrieval only |
 | follow-up | 16 | measure whether the same error family recurs |
 | unrelated | 8 | basic safety check |
 
-There are four error families with two feedback and four follow-up items each.
-Feedback and follow-up text never overlap.
+The v3 protocol has four error families with two baseline, two feedback, two
+validation, and four follow-up items each. All question text is unique across
+splits. Follow-up items are reserved for evaluation and are never used to choose
+error families, embedding backends, thresholds, or `top_k`.
 
 ### Conditions
 
@@ -61,18 +65,23 @@ prevents the experiment from claiming an effect on a task the model already solv
 
 1. **Validate data:** unique IDs, disjoint text, valid corrections, and matching
    feedback/follow-up families.
-2. **Feedback baseline:** answer every feedback item with no memory.
-3. **Select families:** retain families whose measured feedback error rate reaches
-   the configured threshold.
-4. **Create memory:** store wrong-item corrections under `R`; ask the model for a
+2. **Baseline:** answer the independent baseline split with no memory.
+3. **Select families:** retain families whose complete-wrong rate reaches the
+   configured threshold. Truncated, empty, malformed, and API-error responses are
+   excluded from the denominator.
+4. **Feedback:** answer the feedback split with no memory.
+5. **Create memory:** store complete-wrong item corrections under `R`; ask the model for a
    general rule and store it under `L`.
-5. **Retrieve:** encode a query with local hashed features and query persistent
+6. **Calibrate retrieval:** on the validation split, compare hashing and
+   sentence-transformers embeddings across thresholds and `top_k`. Use unrelated
+   items as negatives. Never use follow-up outcomes.
+7. **Retrieve:** encode a query with the selected backend and query persistent
    ChromaDB collections with cosine distance.
-6. **Follow-up run:** answer identical follow-up items under `N`, `R`, and `L`.
-7. **Safety run:** answer unrelated items under all conditions.
-8. **Analyse:** calculate repeated-error rate, retrieval hit rate, exact McNemar
+8. **Follow-up run:** answer identical follow-up items under `N`, `R`, and `L`.
+9. **Safety run:** answer unrelated items under all conditions.
+10. **Analyse:** calculate repeated-error rate, retrieval hit rate, exact McNemar
    tests, and unrelated accuracy.
-9. **Trace:** save the benchmark hash, selected config, memory records, per-item
+11. **Trace:** save the benchmark hash, selected config, memory records, status counts, per-item
    CSV, summary JSON, Markdown report, and every model/retrieval event.
 
 ## 5. Design decisions and reasons
@@ -173,6 +182,59 @@ the outcome meaningless.
 
 This is currently the main blocker. The next benchmark must be calibrated from
 actual failures, not only made nominally more complex.
+
+### D-09: Complete answers are separated from infrastructure failures
+
+Every answer now receives one of:
+
+```text
+COMPLETE_CORRECT
+COMPLETE_WRONG
+TRUNCATED
+EMPTY
+FORMAT_ERROR
+API_ERROR
+```
+
+Only the first two enter accuracy and repeated-error rates. A `finish_reason=length`
+reply is retried with a larger budget and is never cached. If it remains
+truncated, it is excluded from the analysis and counted separately.
+
+Reason: the v2 pilot mixed genuine wrong answers with output cutoffs. That creates
+a false apparent effect and can make memory look helpful merely because one
+condition produces shorter responses.
+
+### D-10: Baseline, feedback, validation, and follow-up are independent
+
+Family selection uses the baseline split. Corrections and memories come from the
+feedback split. Retrieval calibration uses feedback memories plus validation
+queries and unrelated negatives. The follow-up split is used only after all
+choices are frozen.
+
+Reason: selecting families and retrieval thresholds on the same items used to
+evaluate transfer leaks test information into the design.
+
+### D-11: Hashing and semantic embeddings share one interface
+
+`embedding.py` provides both:
+
+```text
+hashing:
+sentence_transformers:
+```
+
+Both return L2-normalised vectors to ChromaDB. The semantic backend is optional
+because PyTorch and model weights are much larger than the hash baseline.
+
+`calibration.py` compares thresholds and `top_k` values for raw corrections and
+abstract lessons separately. This is necessary because their texts have different
+similarity distributions.
+
+The reviewed October calibration is in
+`docs/RETRIEVAL_CALIBRATION_2026-10-26.md`. On that development split, hashing
+achieved 25% family-level retrieval hit rate, while MiniLM achieved 100%, with
+zero unrelated false positives. This is an engineering result, not yet an
+experimental memory effect.
 
 ## 6. Files produced by a run
 

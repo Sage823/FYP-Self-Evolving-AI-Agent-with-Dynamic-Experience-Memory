@@ -17,16 +17,33 @@ from .benchmark import BenchmarkItem, validate_benchmark
 
 DEFAULT_SEED = 20261026
 FAMILY_LAYOUT = (("feedback", 2), ("followup", 4))
+DEVELOPMENT_LAYOUT = (
+    ("baseline", 2),
+    ("feedback", 2),
+    ("validation", 2),
+    ("followup", 4),
+)
 
 
 def _item_id(prefix: str, split: str, index: int) -> str:
     """按题族、数据分区和序号生成稳定 ID。"""
-    short_split = "fb" if split == "feedback" else "fu"
+    short_split = {
+        "baseline": "bl",
+        "feedback": "fb",
+        "validation": "va",
+        "followup": "fu",
+    }.get(split, split[:2])
     return f"{prefix}_{short_split}_{index:02d}"
 
 
+def _layout(with_development_splits: bool) -> tuple[tuple[str, int], ...]:
+    return DEVELOPMENT_LAYOUT if with_development_splits else FAMILY_LAYOUT
+
+
 def _state_tracking_items(
-    rng: random.Random, difficulty: int = 1
+    rng: random.Random,
+    difficulty: int = 1,
+    with_development_splits: bool = False,
 ) -> list[BenchmarkItem]:
     """生成连续交换任务，并用字典逐步更新得到标准答案。"""
     people_pool = [
@@ -59,7 +76,7 @@ def _state_tracking_items(
     ]
     items: list[BenchmarkItem] = []
     family_index = 0
-    for split, count in FAMILY_LAYOUT:
+    for split, count in _layout(with_development_splits):
         for split_index in range(1, count + 1):
             family_index += 1
             participant_count = 9 if difficulty == 1 else 12
@@ -128,10 +145,14 @@ def _boolean_expression(rng: random.Random, depth: int) -> tuple[str, bool]:
     return f"({left_text} {operator} {right_text})", value
 
 
-def _boolean_items(rng: random.Random, difficulty: int = 1) -> list[BenchmarkItem]:
+def _boolean_items(
+    rng: random.Random,
+    difficulty: int = 1,
+    with_development_splits: bool = False,
+) -> list[BenchmarkItem]:
     """生成深层布尔表达式任务。"""
     items: list[BenchmarkItem] = []
-    for split, count in FAMILY_LAYOUT:
+    for split, count in _layout(with_development_splits):
         for split_index in range(1, count + 1):
             expression, value = _boolean_expression(
                 rng, depth=6 if difficulty == 1 else 8
@@ -164,11 +185,15 @@ def _boolean_items(rng: random.Random, difficulty: int = 1) -> list[BenchmarkIte
     return items
 
 
-def _date_items(rng: random.Random, difficulty: int = 1) -> list[BenchmarkItem]:
+def _date_items(
+    rng: random.Random,
+    difficulty: int = 1,
+    with_development_splits: bool = False,
+) -> list[BenchmarkItem]:
     """生成跨月、跨年和闰年的顺序日期运算任务。"""
     items: list[BenchmarkItem] = []
     total_index = 0
-    for split, count in FAMILY_LAYOUT:
+    for split, count in _layout(with_development_splits):
         for split_index in range(1, count + 1):
             total_index += 1
             start = date(
@@ -260,11 +285,15 @@ def _dyck_problem(
     return " ".join(prefix), chr(65 + options.index(correct)), options
 
 
-def _dyck_items(rng: random.Random, difficulty: int = 1) -> list[BenchmarkItem]:
+def _dyck_items(
+    rng: random.Random,
+    difficulty: int = 1,
+    with_development_splits: bool = False,
+) -> list[BenchmarkItem]:
     """生成 BBH Dyck-language 风格的栈补全任务。"""
     items: list[BenchmarkItem] = []
     total_index = 0
-    for split, count in FAMILY_LAYOUT:
+    for split, count in _layout(with_development_splits):
         for split_index in range(1, count + 1):
             total_index += 1
             prefix, answer, options = _dyck_problem(rng, total_index, difficulty)
@@ -325,17 +354,24 @@ def _unrelated_items() -> list[BenchmarkItem]:
 
 
 def build_benchmark(
-    seed: int = DEFAULT_SEED, difficulty: int = 1
+    seed: int = DEFAULT_SEED,
+    difficulty: int = 1,
+    with_development_splits: bool = False,
 ) -> list[BenchmarkItem]:
-    """按固定随机种子构建完整的 32 道 BBH 风格 benchmark。"""
+    """按固定随机种子构建 BBH 风格 benchmark。
+
+    ``with_development_splits=True`` creates the v3 protocol:
+    baseline -> feedback -> validation -> follow-up, plus unrelated safety items.
+    The default remains the original 32-item v1/v2 layout for compatibility.
+    """
     rng = random.Random(seed)
     if difficulty not in {1, 2}:
         raise ValueError("difficulty must be 1 or 2")
     items = [
-        *_state_tracking_items(rng, difficulty),
-        *_boolean_items(rng, difficulty),
-        *_date_items(rng, difficulty),
-        *_dyck_items(rng, difficulty),
+        *_state_tracking_items(rng, difficulty, with_development_splits),
+        *_boolean_items(rng, difficulty, with_development_splits),
+        *_date_items(rng, difficulty, with_development_splits),
+        *_dyck_items(rng, difficulty, with_development_splits),
         *_unrelated_items(),
     ]
     validate_benchmark(items)
@@ -343,7 +379,10 @@ def build_benchmark(
 
 
 def write_benchmark(
-    path: str | Path, seed: int = DEFAULT_SEED, difficulty: int = 1
+    path: str | Path,
+    seed: int = DEFAULT_SEED,
+    difficulty: int = 1,
+    with_development_splits: bool = False,
 ) -> Path:
     """把生成的 benchmark 以 UTF-8 JSONL 写入指定路径。"""
     output = Path(path)
@@ -363,7 +402,7 @@ def write_benchmark(
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        for item in build_benchmark(seed, difficulty)
+        for item in build_benchmark(seed, difficulty, with_development_splits)
     ]
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return output
@@ -375,10 +414,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", default="data/benchmark_bbh_v1.jsonl")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--difficulty", type=int, choices=(1, 2), default=1)
+    parser.add_argument(
+        "--with-development-splits",
+        action="store_true",
+        help="generate separate baseline and retrieval-validation splits",
+    )
     args = parser.parse_args(argv)
-    output = write_benchmark(args.output, args.seed, args.difficulty)
+    output = write_benchmark(
+        args.output,
+        args.seed,
+        args.difficulty,
+        args.with_development_splits,
+    )
     print(
-        f"Wrote {len(build_benchmark(args.seed, args.difficulty))} items to {output}"
+        f"Wrote {len(build_benchmark(args.seed, args.difficulty, args.with_development_splits))} "
+        f"items to {output}"
     )
     return 0
 

@@ -41,22 +41,33 @@ def analyse(rows: list[dict[str, Any]], eligible_families: set[str]) -> dict[str
     follow = frame[frame["split"] == "followup"].copy()
     follow = follow[follow["family"].isin(eligible_families)]
     safety = frame[frame["split"] == "unrelated"].copy()
+    valid_frame = _complete_rows(frame)
+    valid_follow = _complete_rows(follow)
+    valid_safety = _complete_rows(safety)
 
     by_condition: dict[str, Any] = {}
     for condition in sorted(follow["condition"].unique()):
-        subset = follow[follow["condition"] == condition]
+        all_subset = follow[follow["condition"] == condition]
+        subset = valid_follow[valid_follow["condition"] == condition]
+        repeated_error_rate = _rate(subset.to_dict("records"))
         by_condition[condition] = {
             "items": int(len(subset)),
-            "repeated_error_rate": _rate(subset.to_dict("records")),
-            "accuracy": float(1 - _rate(subset.to_dict("records"))) if len(subset) else None,
+            "excluded_items": int(len(all_subset) - len(subset)),
+            "repeated_error_rate": repeated_error_rate,
+            "accuracy": (
+                float(1 - repeated_error_rate)
+                if repeated_error_rate is not None
+                else None
+            ),
             "retrieval_hit_rate": (
                 float(subset["retrieval_hit"].mean()) if len(subset) else None
             ),
             "mean_retrieved": float(subset["retrieved_count"].mean()) if len(subset) else None,
+            "status_counts": _status_counts(all_subset),
         }
 
     by_family: dict[str, Any] = {}
-    for family, group in follow.groupby("family"):
+    for family, group in valid_follow.groupby("family"):
         by_family[family] = {
             condition: {
                 "items": int(len(part)),
@@ -72,8 +83,8 @@ def analyse(rows: list[dict[str, Any]], eligible_families: set[str]) -> dict[str
     paired: dict[str, Any] = {}
     keys = ["repeat", "item_id"]
     for left, right in (("L", "N"), ("R", "N"), ("L", "R")):
-        left_rows = follow[follow["condition"] == left].set_index(keys).sort_index()
-        right_rows = follow[follow["condition"] == right].set_index(keys).sort_index()
+        left_rows = valid_follow[valid_follow["condition"] == left].set_index(keys).sort_index()
+        right_rows = valid_follow[valid_follow["condition"] == right].set_index(keys).sort_index()
         common = left_rows.index.intersection(right_rows.index)
         if len(common) == 0:
             continue
@@ -93,15 +104,25 @@ def analyse(rows: list[dict[str, Any]], eligible_families: set[str]) -> dict[str
 
     safety_summary: dict[str, Any] = {}
     for condition in sorted(safety["condition"].unique()):
-        subset = safety[safety["condition"] == condition]
+        all_subset = safety[safety["condition"] == condition]
+        subset = valid_safety[valid_safety["condition"] == condition]
         safety_summary[condition] = {
             "items": int(len(subset)),
-            "accuracy": float(subset["correct"].mean()),
-            "any_retrieval_rate": float((subset["retrieved_count"] > 0).mean()),
+            "excluded_items": int(len(all_subset) - len(subset)),
+            "accuracy": float(subset["correct"].mean()) if len(subset) else None,
+            "any_retrieval_rate": (
+                float((subset["retrieved_count"] > 0).mean()) if len(subset) else None
+            ),
+            "status_counts": _status_counts(all_subset),
         }
 
     safety_drop = None
-    if "N" in safety_summary and "L" in safety_summary:
+    if (
+        "N" in safety_summary
+        and "L" in safety_summary
+        and safety_summary["N"]["accuracy"] is not None
+        and safety_summary["L"]["accuracy"] is not None
+    ):
         safety_drop = (
             safety_summary["N"]["accuracy"] - safety_summary["L"]["accuracy"]
         ) * 100
@@ -110,6 +131,10 @@ def analyse(rows: list[dict[str, Any]], eligible_families: set[str]) -> dict[str
     h2_reduction = paired.get("L_vs_R", {}).get("relative_reduction_pct")
     return {
         "eligible_families": sorted(eligible_families),
+        "result_status_counts": _status_counts(valid_frame if not valid_frame.empty else frame),
+        "all_result_status_counts": _status_counts(frame),
+        "valid_answers": int(len(valid_frame)),
+        "excluded_answers": int(len(frame) - len(valid_frame)),
         "conditions": by_condition,
         "by_family": by_family,
         "paired_contrasts": paired,
@@ -145,6 +170,7 @@ def render_report(summary: dict[str, Any]) -> str:
         "# Experience-memory run report",
         "",
         f"Eligible error families: {', '.join(summary['eligible_families']) or 'none'}",
+        f"Excluded non-complete answers: {summary.get('excluded_answers', 0)}",
         "",
         "## Repeated error by condition",
         "",
@@ -201,4 +227,22 @@ def _fmt_pp(value: float | None) -> str:
 def _fmt_percent_value(value: float | None) -> str:
     """格式化已经采用百分数单位的数值，不再额外乘以一百。"""
     return "n/a" if value is None else f"{value:.1f}%"
+
+
+def _complete_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    if "answer_valid" in frame.columns:
+        return frame[frame["answer_valid"].fillna(False).astype(bool)].copy()
+    # Backward compatibility for older result files that predate status fields.
+    if "status" in frame.columns:
+        return frame[
+            frame["status"].isin(["COMPLETE_CORRECT", "COMPLETE_WRONG"])
+        ].copy()
+    return frame.copy()
+
+
+def _status_counts(frame: pd.DataFrame) -> dict[str, int]:
+    if "status" not in frame.columns:
+        return {"LEGACY_UNKNOWN": int(len(frame))}
+    counts = frame["status"].fillna("UNKNOWN").astype(str).value_counts()
+    return {str(key): int(value) for key, value in sorted(counts.items())}
 

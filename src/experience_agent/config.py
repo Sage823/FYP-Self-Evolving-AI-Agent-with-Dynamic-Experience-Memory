@@ -25,7 +25,13 @@ class ExperimentConfig:
     repeats: int
     top_k: int
     min_similarity: float
+    raw_top_k: int
+    raw_min_similarity: float
+    lesson_top_k: int
+    lesson_min_similarity: float
     embedding_dim: int
+    retrieval_backend: str
+    embedding_model: str
     max_new_calls: int
     max_total_tokens: int
     feedback_error_threshold: float
@@ -60,7 +66,22 @@ class ExperimentConfig:
             repeats=int(raw.get("repeats", 1)),
             top_k=int(raw.get("top_k", 2)),
             min_similarity=float(raw.get("min_similarity", 0.08)),
+            raw_top_k=int(raw.get("raw_top_k", raw.get("top_k", 2))),
+            raw_min_similarity=float(
+                raw.get("raw_min_similarity", raw.get("min_similarity", 0.08))
+            ),
+            lesson_top_k=int(raw.get("lesson_top_k", raw.get("top_k", 2))),
+            lesson_min_similarity=float(
+                raw.get("lesson_min_similarity", raw.get("min_similarity", 0.08))
+            ),
             embedding_dim=int(raw.get("embedding_dim", 2048)),
+            retrieval_backend=str(raw.get("retrieval_backend", "hashing")),
+            embedding_model=str(
+                raw.get(
+                    "embedding_model",
+                    "sentence-transformers/all-MiniLM-L6-v2",
+                )
+            ),
             max_new_calls=max_calls,
             max_total_tokens=max_tokens,
             feedback_error_threshold=float(raw.get("feedback_error_threshold", 0.3)),
@@ -82,8 +103,18 @@ class ExperimentConfig:
             raise ValueError("reasoning_effort must be none, low, high, max, or null")
         if self.top_k < 1 or self.embedding_dim < 64:
             raise ValueError("top_k must be >= 1 and embedding_dim >= 64")
+        if min(self.raw_top_k, self.lesson_top_k) < 1:
+            raise ValueError("raw_top_k and lesson_top_k must be >= 1")
+        if self.retrieval_backend not in {"hashing", "sentence_transformers"}:
+            raise ValueError(
+                "retrieval_backend must be 'hashing' or 'sentence_transformers'"
+            )
         if not 0.0 <= self.min_similarity <= 1.0:
             raise ValueError("min_similarity must be between 0 and 1")
+        if not 0.0 <= self.raw_min_similarity <= 1.0:
+            raise ValueError("raw_min_similarity must be between 0 and 1")
+        if not 0.0 <= self.lesson_min_similarity <= 1.0:
+            raise ValueError("lesson_min_similarity must be between 0 and 1")
         if not set(self.conditions) <= {"N", "R", "L"}:
             raise ValueError("conditions must be a subset of N, R, L")
         if not 0.0 < self.feedback_error_threshold <= 1.0:
