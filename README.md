@@ -15,7 +15,7 @@ Version `v0` implements the complete minimal learning loop:
 5. report repeated-error rate, retrieval hit rate, paired contrasts, and unrelated
    question safety.
 
-The repository has validated BBH-inspired benchmarks, 23 passing tests, an
+The repository has validated BBH-inspired benchmarks, 25 passing tests, an
 offline end-to-end mode, response caching, and hard per-run call/token budgets.
 The v3 protocol has separate baseline, feedback, retrieval-validation, follow-up,
 and unrelated splits. Responses are classified as complete-correct,
@@ -31,6 +31,15 @@ motivated the harder BBH-inspired task distribution described below.
 The earlier `benchmark_bbh_v2.jsonl` run produced failures, but several were
 output-length truncations rather than genuine reasoning errors. Those observations
 motivated the stricter v3 workflow; they are not treated as a memory effect.
+
+An expanded v3 run froze baseline, feedback, validation, model, embedding, and
+retrieval settings while increasing the eligible family's follow-up set from 4 to
+20 items. With two truncated answers excluded, repeated errors were 63.2% without
+memory, 36.8% with raw corrections, and 35.0% with abstracted lessons. Raw and
+abstract memory both improved on no memory; the difference between raw and
+abstract memory remained small and non-significant. This is a one-run descriptive
+result, not a final claim. See
+[the reviewed result summary](docs/V3_EXPANDED_RESULTS_2026-10-27.md).
 
 ## System
 

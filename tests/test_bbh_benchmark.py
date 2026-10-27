@@ -3,8 +3,10 @@
 by AI.Coding
 """
 
-from experience_agent.benchmark import benchmark_stats, validate_benchmark
-from experience_agent.bbh_benchmark import build_benchmark
+from pathlib import Path
+
+from experience_agent.benchmark import benchmark_stats, load_benchmark, validate_benchmark
+from experience_agent.bbh_benchmark import build_benchmark, build_expanded_followups
 
 
 def test_bbh_v1_is_deterministic_and_balanced() -> None:
@@ -59,3 +61,38 @@ def test_calibrated_benchmark_has_independent_development_splits() -> None:
         "unrelated": 8,
         "validation": 8,
     }
+
+
+def test_expanded_followups_keep_development_splits_unchanged() -> None:
+    base = build_benchmark(difficulty=2, with_development_splits=True)
+    expanded = build_expanded_followups(
+        seed=20261026,
+        difficulty=2,
+        followup_per_family=20,
+    )
+    base_development = [item for item in base if item.split != "followup"]
+    expanded_development = [item for item in expanded if item.split != "followup"]
+
+    assert base_development == expanded_development
+    stats = benchmark_stats(expanded)
+    assert stats["total"] == 112
+    assert stats["by_split"]["followup"] == 80
+    assert stats["by_split"]["baseline"] == 8
+    assert stats["by_split"]["feedback"] == 8
+    assert stats["by_split"]["validation"] == 8
+    assert stats["by_split"]["unrelated"] == 8
+
+
+def test_expanded_followups_can_freeze_an_existing_file() -> None:
+    root = Path(__file__).resolve().parents[1]
+    base_path = root / "data" / "benchmark_bbh_v3.jsonl"
+    base = load_benchmark(base_path)
+    expanded = build_expanded_followups(
+        seed=20261026,
+        difficulty=2,
+        followup_per_family=20,
+        base_benchmark=base_path,
+    )
+    assert [item for item in base if item.split != "followup"] == [
+        item for item in expanded if item.split != "followup"
+    ]

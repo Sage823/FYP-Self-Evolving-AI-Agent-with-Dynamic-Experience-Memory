@@ -236,6 +236,24 @@ achieved 25% family-level retrieval hit rate, while MiniLM achieved 100%, with
 zero unrelated false positives. This is an engineering result, not yet an
 experimental memory effect.
 
+### D-12: Follow-up expansion freezes all development splits
+
+Increasing the follow-up count with the original generator would consume
+additional random numbers before later families and change their baseline,
+feedback, and validation items. The expanded generator therefore reads the frozen
+v3 file, keeps every non-follow-up item unchanged, and draws fixed-seed follow-up
+items from independent generator runs.
+
+The resulting benchmark has 112 items: 8 baseline, 8 feedback, 8 validation,
+80 follow-up, and 8 unrelated. Only the eligible B1 family ran during the
+2026-10-27 experiment.
+
+The reviewed result is
+`docs/V3_EXPANDED_RESULTS_2026-10-27.md`. With two truncated answers excluded,
+the N, R, and L repeated-error rates were 63.2%, 36.8%, and 35.0%. The result
+shows a descriptive improvement after expansion, but one run and one family
+remain insufficient for a final claim.
+
 ## 6. Files produced by a run
 
 ```text

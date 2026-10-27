@@ -58,3 +58,15 @@
 ## 完成状态
 
 > 进度: 12/12 已完成
+
+## 2026-10-26 follow-up
+
+- [x] 区分完整、错误、截断、空回复、格式错误与接口错误
+- [x] 生成独立 baseline、feedback、validation、follow-up 数据分区
+- [x] 使用独立 validation 数据校准检索阈值和 top-k
+- [x] 增加 hashing 与 sentence-transformers 可比 embedding 接口
+- [x] 比较两个 backend，并记录校准配置
+- [x] 增加面向初学者的操作、验证和 Git 推送手册
+- [x] 冻结 v3 开发集并将每族 follow-up 扩展到 20 道
+- [x] 使用扩大样本重跑真实 DeepSeek 实验
+- [x] 记录扩样结果、截断排除和解释边界

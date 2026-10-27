@@ -280,7 +280,9 @@ def _dyck_problem(
         wrong[position] = replacements[(replacements.index(wrong[position]) + 1) % 4]
         candidates.add(" ".join(wrong))
         attempt += 1
-    options = list(candidates)
+    # Sets have process-dependent iteration order. Sort before shuffling so a
+    # fixed seed produces byte-for-byte stable option order across processes.
+    options = sorted(candidates)
     rng.shuffle(options)
     return " ".join(prefix), chr(65 + options.index(correct)), options
 
@@ -378,15 +380,101 @@ def build_benchmark(
     return items
 
 
+def build_expanded_followups(
+    *,
+    seed: int = DEFAULT_SEED,
+    difficulty: int = 2,
+    followup_per_family: int = 20,
+    base_benchmark: str | Path | None = None,
+) -> list[BenchmarkItem]:
+    """Keep the frozen development splits and expand only follow-up items.
+
+    Expanding the original multi-split generator would consume additional random
+    numbers before later families and therefore change their baseline, feedback,
+    and validation items. This function instead freezes the original v3
+    development data and draws follow-up items from fixed independent seeds.
+    """
+    if followup_per_family < 1:
+        raise ValueError("followup_per_family must be positive")
+    if base_benchmark is None:
+        base = build_benchmark(
+            seed=seed,
+            difficulty=difficulty,
+            with_development_splits=True,
+        )
+    else:
+        from .benchmark import load_benchmark
+
+        base = load_benchmark(base_benchmark)
+    development = [item for item in base if item.split != "followup"]
+    families = sorted({item.family for item in base if item.split == "feedback"})
+    selected: dict[str, list[BenchmarkItem]] = {family: [] for family in families}
+    seen_questions = {
+        item.question.strip().lower()
+        for item in development
+    }
+    for offset in range(1, 1000):
+        generated = build_benchmark(
+            seed=seed + 10000 + offset,
+            difficulty=difficulty,
+            with_development_splits=True,
+        )
+        for item in generated:
+            if item.split != "followup":
+                continue
+            key = item.question.strip().lower()
+            if key in seen_questions:
+                continue
+            if len(selected[item.family]) >= followup_per_family:
+                continue
+            selected[item.family].append(item)
+            seen_questions.add(key)
+        if all(len(items) >= followup_per_family for items in selected.values()):
+            break
+    short = {family: len(items) for family, items in selected.items() if len(items) < followup_per_family}
+    if short:
+        raise RuntimeError(f"could not generate enough unique follow-up items: {short}")
+    expanded: list[BenchmarkItem] = []
+    for family in families:
+        prefix = family.split("_", 1)[0].lower()
+        for index, item in enumerate(selected[family][:followup_per_family], start=1):
+            expanded.append(
+                BenchmarkItem(
+                    id=f"{prefix}_xfu_{index:03d}",
+                    family=item.family,
+                    split="followup",
+                    domain=item.domain,
+                    question=item.question,
+                    answer=item.answer,
+                    distractor=item.distractor,
+                )
+            )
+    items = development + expanded
+    validate_benchmark(items)
+    return items
+
+
 def write_benchmark(
     path: str | Path,
     seed: int = DEFAULT_SEED,
     difficulty: int = 1,
     with_development_splits: bool = False,
+    followup_per_family: int | None = None,
+    base_benchmark: str | Path | None = None,
 ) -> Path:
     """把生成的 benchmark 以 UTF-8 JSONL 写入指定路径。"""
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
+    items = (
+        build_expanded_followups(
+            seed=seed,
+            difficulty=difficulty,
+            followup_per_family=followup_per_family,
+            base_benchmark=base_benchmark,
+        )
+        if followup_per_family is not None
+        else build_benchmark(seed, difficulty, with_development_splits)
+    )
     lines = [
         json.dumps(
             {
@@ -402,7 +490,7 @@ def write_benchmark(
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        for item in build_benchmark(seed, difficulty, with_development_splits)
+        for item in items
     ]
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return output
@@ -419,16 +507,28 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="generate separate baseline and retrieval-validation splits",
     )
+    parser.add_argument(
+        "--followup-per-family",
+        type=int,
+        default=None,
+        help="freeze non-followup splits and expand each follow-up family to this count",
+    )
+    parser.add_argument(
+        "--base-benchmark",
+        default=None,
+        help="freeze this existing benchmark when expanding follow-up items",
+    )
     args = parser.parse_args(argv)
     output = write_benchmark(
         args.output,
         args.seed,
         args.difficulty,
         args.with_development_splits,
+        args.followup_per_family,
+        args.base_benchmark,
     )
     print(
-        f"Wrote {len(build_benchmark(args.seed, args.difficulty, args.with_development_splits))} "
-        f"items to {output}"
+        f"Wrote benchmark to {output}"
     )
     return 0
 

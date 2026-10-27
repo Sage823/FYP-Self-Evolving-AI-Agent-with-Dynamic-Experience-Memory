@@ -26,7 +26,7 @@ We created a 32-item pilot benchmark covering constraint ordering, ordered decis
 rules, conditional pricing, and synthetic protocol application. The benchmark has
 separate feedback, follow-up, and unrelated-question splits. We also implemented
 automatic scoring and a paired analysis of repeated-error rates, retrieval hit
-rate, and unrelated-question accuracy. Twenty-three automated tests now pass, including a
+rate, and unrelated-question accuracy. Twenty-five automated tests now pass, including a
 complete no-API run of the answer-correct-learn-retrieve loop.
 
 The implementation includes response caching, a per-run API budget, benchmark
@@ -56,6 +56,19 @@ queries, while the MiniLM semantic embedding found it in 100%; both returned no
 memory on the eight unrelated validation negatives. The semantic settings were
 recorded for the next real-model run, but no new memory-effect conclusion is made
 from the old truncated pilot.
+
+The first clean v3 run had only four follow-up items and showed 50% repeated
+errors under all conditions. Inspection showed that raw and abstract memory each
+fixed one item and harmed another, so the equal aggregate rates were not a fair
+replication of model behaviour. We preserved all non-follow-up splits and model
+settings, expanded the eligible family from 4 to 20 follow-up items, and reran the
+experiment. With two truncated answers excluded, repeated errors were 63.2%
+without memory, 36.8% with raw corrections, and 35.0% with abstract lessons. The
+risk reductions relative to no memory were 33.3 and 26.3 percentage points,
+respectively. Raw and abstract memory differed by only 5.3 percentage points and
+the paired comparison was not significant. This is descriptive evidence of
+improvement after increasing sample size, but it remains one model, one family,
+and one run.
 
 ## Major difficulties
 
