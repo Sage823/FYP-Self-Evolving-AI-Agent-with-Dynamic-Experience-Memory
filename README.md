@@ -112,7 +112,9 @@ The primary outcome is repeated-error rate on follow-up items whose status is
 separately and excluded from the analysis denominator.
 
 See [the experiment manual](docs/EXPERIMENT_MANUAL.md) for design decisions,
-trade-offs, troubleshooting, and the next experimental steps. A draft aligned to
+trade-offs, troubleshooting, and the next experimental steps. Dr. Chen's request
+for candidate-level retrieval logging is documented in
+[the retrieval trace update](docs/RETRIEVAL_TRACE_UPDATE_2026-11-09.md). A draft aligned to
 the monthly report template is in
 [the October progress notes](docs/PROGRESS_REPORT_NOTES_2026-10.md). A step-by-step
 introduction to the new status, baseline, calibration, and Git workflow is in

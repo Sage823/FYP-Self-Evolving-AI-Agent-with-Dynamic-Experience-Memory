@@ -357,18 +357,35 @@ class ExperimentRunner:
         memory: ExperienceMemory | None,
     ) -> None:
         top_k, min_similarity = self._retrieval_params(condition)
-        hits = (
+        candidates = (
             memory.search(
                 item.question,
                 k=top_k,
-                min_similarity=min_similarity,
+                # Keep the ranked candidates before applying the configured
+                # cutoff, so a miss can be diagnosed from its actual score.
+                min_similarity=float("-inf"),
             )
             if memory is not None
             else []
         )
+        hits = [hit for hit in candidates if hit.score >= min_similarity]
         retrieved = [hit.record for hit in hits]
         answer = self.agent.answer(item, memories=retrieved)
         retrieval_hit = any(record.get("error_type") == item.family for record in retrieved)
+        if memory is None:
+            retrieval_status = "no_memory_condition"
+        elif not candidates:
+            retrieval_status = "no_candidates"
+        elif not hits:
+            retrieval_status = "below_threshold"
+        elif retrieval_hit:
+            retrieval_status = "same_family_proxy_selected"
+        else:
+            retrieval_status = "other_family_selected"
+        candidate_ids = [str(hit.record.get("source_id", "")) for hit in candidates]
+        candidate_scores = [round(hit.score, 6) for hit in candidates]
+        selected_ids = [str(hit.record.get("source_id", "")) for hit in hits]
+        selected_scores = [round(hit.score, 6) for hit in hits]
         row = self._base_row(item, condition=condition, repeat=repeat)
         row.update(answer.as_dict())
         row.update(
@@ -379,6 +396,15 @@ class ExperimentRunner:
                 ),
                 "retrieval_scores": "|".join(f"{hit.score:.5f}" for hit in hits),
                 "retrieval_hit": bool(retrieval_hit),
+                "retrieval_hit_basis": "same_family_proxy_not_applicability_gold",
+                "retrieval_status": retrieval_status,
+                "top_k": top_k,
+                "similarity_threshold": min_similarity,
+                "candidate_ids": json.dumps(candidate_ids),
+                "candidate_scores": json.dumps(candidate_scores),
+                "selected_ids": json.dumps(selected_ids),
+                "selected_scores": json.dumps(selected_scores),
+                "injected_memory_source_ids": json.dumps(selected_ids),
             }
         )
         self.rows.append(row)
@@ -394,6 +420,14 @@ class ExperimentRunner:
             correct=answer.correct,
             retrieved=[record.get("source_id") for record in retrieved],
             retrieval_scores=[round(hit.score, 5) for hit in hits],
+            candidate_ids=candidate_ids,
+            candidate_scores=candidate_scores,
+            selected_ids=selected_ids,
+            selected_scores=selected_scores,
+            top_k=top_k,
+            similarity_threshold=min_similarity,
+            retrieval_status=retrieval_status,
+            retrieval_hit_basis="same_family_proxy_not_applicability_gold",
             status=answer.status,
             finish_reason=answer.finish_reason,
         )
